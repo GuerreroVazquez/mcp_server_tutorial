@@ -1,5 +1,7 @@
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
+# creating the MDK with the python SDK
 mcp = FastMCP("DocumentMCP", log_level="ERROR")
 
 
@@ -13,6 +15,14 @@ docs = {
 }
 
 # TODO: Write a tool to read a doc
+
+@mcp.tool("read_doc", description="Reads the contents of a document given its ID.")
+def read_doc(doc_id: str = Field(description="The ID of the document to read.")) -> str:
+    # this will generate the json schema for us.
+    if doc_id not in docs:
+        raise ValueError(f"Document with ID '{doc_id}' not found.")
+    return docs[doc_id]
+
 # TODO: Write a tool to edit a doc
 # TODO: Write a resource to return all doc id's
 # TODO: Write a resource to return the contents of a particular doc

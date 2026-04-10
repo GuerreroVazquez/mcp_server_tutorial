@@ -1,32 +1,33 @@
 import json
-from typing import Optional, Literal, List
-from mcp.types import CallToolResult, Tool, TextContent
+from typing import Any, Optional, List
+from mcp.types import CallToolResult, TextContent
 from mcp_client import MCPClient
-from anthropic.types import Message, ToolResultBlockParam
 
 
 class ToolManager:
     @classmethod
-    async def get_all_tools(cls, clients: dict[str, MCPClient]) -> list[Tool]:
-        """Gets all tools from the provided clients."""
-        tools = []
+    async def get_all_tools(cls, clients: dict[str, MCPClient]) -> list[dict[str, Any]]:
+        """Build Gemini-compatible function declarations from MCP tools."""
+        function_declarations: list[dict[str, Any]] = []
+
         for client in clients.values():
             tool_models = await client.list_tools()
-            tools += [
-                {
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.inputSchema,
-                }
-                for t in tool_models
-            ]
-        return tools
+            for t in tool_models:
+                function_declarations.append(
+                    {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "parameters": t.inputSchema,
+                    }
+                )
+
+        return [{"function_declarations": function_declarations}] if function_declarations else []
 
     @classmethod
     async def _find_client_with_tool(
         cls, clients: list[MCPClient], tool_name: str
     ) -> Optional[MCPClient]:
-        """Finds the first client that has the specified tool."""
+        """Finds the first client that exposes the named tool."""
         for client in clients:
             tools = await client.list_tools()
             tool = next((t for t in tools if t.name == tool_name), None)
@@ -35,73 +36,122 @@ class ToolManager:
         return None
 
     @classmethod
-    def _build_tool_result_part(
+    def _extract_function_calls(cls, response: Any) -> list[dict[str, Any]]:
+        """Extract Gemini function calls from a GenerateContentResponse."""
+        function_calls: list[dict[str, Any]] = []
+
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+
+            for part in getattr(content, "parts", []) or []:
+                fc = getattr(part, "function_call", None)
+                if fc is None:
+                    fc = getattr(part, "functionCall", None)
+
+                if fc is None:
+                    continue
+
+                # Handle SDK object or dict-like serialization
+                if hasattr(fc, "model_dump"):
+                    fc = fc.model_dump(exclude_none=True)
+                elif not isinstance(fc, dict):
+                    fc = {
+                        "name": getattr(fc, "name", None),
+                        "args": getattr(fc, "args", None),
+                        "id": getattr(fc, "id", None),
+                    }
+
+                function_calls.append(fc)
+
+        return function_calls
+
+    @classmethod
+    def _build_function_response_part(
         cls,
-        tool_use_id: str,
-        text: str,
-        status: Literal["success"] | Literal["error"],
-    ) -> ToolResultBlockParam:
-        """Builds a tool result part dictionary."""
-        return {
-            "tool_use_id": tool_use_id,
-            "type": "tool_result",
-            "content": text,
-            "is_error": status == "error",
+        tool_name: str,
+        response_payload: Any,
+        call_id: str | None = None,
+        is_error: bool = False,
+    ) -> dict[str, Any]:
+        payload = {
+            "name": tool_name,
+            "response": {
+                "result": response_payload,
+                "is_error": is_error,
+            },
         }
+
+        if call_id:
+            payload["id"] = call_id
+
+        return {"functionResponse": payload}
 
     @classmethod
     async def execute_tool_requests(
-        cls, clients: dict[str, MCPClient], message: Message
-    ) -> List[ToolResultBlockParam]:
-        """Executes a list of tool requests against the provided clients."""
-        tool_requests = [
-            block for block in message.content if block.type == "tool_use"
-        ]
-        tool_result_blocks: list[ToolResultBlockParam] = []
-        for tool_request in tool_requests:
-            tool_use_id = tool_request.id
-            tool_name = tool_request.name
-            tool_input = tool_request.input
+        cls, clients: dict[str, MCPClient], response: Any
+    ) -> List[dict[str, Any]]:
+        """Execute Gemini function calls and return Gemini functionResponse parts."""
+        function_calls = cls._extract_function_calls(response)
+        function_response_parts: list[dict[str, Any]] = []
+
+        for function_call in function_calls:
+            tool_name = function_call.get("name")
+            tool_input = function_call.get("args", {}) or {}
+            call_id = function_call.get("id")
 
             client = await cls._find_client_with_tool(
                 list(clients.values()), tool_name
             )
 
             if not client:
-                tool_result_part = cls._build_tool_result_part(
-                    tool_use_id, "Could not find that tool", "error"
+                function_response_parts.append(
+                    cls._build_function_response_part(
+                        tool_name=tool_name or "unknown_tool",
+                        response_payload={"error": "Could not find that tool"},
+                        call_id=call_id,
+                        is_error=True,
+                    )
                 )
-                tool_result_blocks.append(tool_result_part)
                 continue
 
+            tool_output = None
             try:
-                tool_output: CallToolResult | None = await client.call_tool(
-                    tool_name, tool_input
-                )
-                items = []
-                if tool_output:
-                    items = tool_output.content
+                tool_output = await client.call_tool(tool_name, tool_input)
+
+                items = tool_output.content if tool_output else []
                 content_list = [
                     item.text for item in items if isinstance(item, TextContent)
                 ]
-                content_json = json.dumps(content_list)
-                tool_result_part = cls._build_tool_result_part(
-                    tool_use_id,
-                    content_json,
-                    "error"
-                    if tool_output and tool_output.isError
-                    else "success",
+
+                response_payload: Any
+                if len(content_list) == 1:
+                    # Return a single string directly when possible
+                    response_payload = content_list[0]
+                else:
+                    response_payload = content_list
+
+                function_response_parts.append(
+                    cls._build_function_response_part(
+                        tool_name=tool_name,
+                        response_payload=response_payload,
+                        call_id=call_id,
+                        is_error=bool(tool_output and tool_output.isError),
+                    )
                 )
+
             except Exception as e:
                 error_message = f"Error executing tool '{tool_name}': {e}"
                 print(error_message)
-                tool_result_part = cls._build_tool_result_part(
-                    tool_use_id,
-                    json.dumps({"error": error_message}),
-                    "error"
-                    if tool_output and tool_output.isError
-                    else "success",
+
+                function_response_parts.append(
+                    cls._build_function_response_part(
+                        tool_name=tool_name or "unknown_tool",
+                        response_payload={"error": error_message},
+                        call_id=call_id,
+                        is_error=True,
+                    )
                 )
 
-            tool_result_blocks.append(tool_result_part)
-        return tool_result_blocks
+        return function_response_parts

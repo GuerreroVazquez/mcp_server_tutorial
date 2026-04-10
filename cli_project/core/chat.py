@@ -29,19 +29,19 @@ class Chat:
 
             self.gemini_service.add_assistant_message(self.messages, response)
 
-            if response.stop_reason == "tool_use":
+            if self._has_function_calls(response):
                 print(self.gemini_service.text_from_message(response))
+
                 tool_result_parts = await ToolManager.execute_tool_requests(
                     self.clients, response
                 )
 
+                # Send tool results back as a user turn
                 self.gemini_service.add_user_message(
                     self.messages, tool_result_parts
                 )
             else:
-                final_text_response = self.gemini_service.text_from_message(
-                    response
-                )
+                final_text_response = self.gemini_service.text_from_message(response)
                 break
 
         return final_text_response

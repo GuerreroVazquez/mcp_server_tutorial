@@ -1,10 +1,7 @@
 from typing import Any, List, Tuple
-
 from mcp.types import Prompt, PromptMessage
-from anthropic.types import MessageParam
 
 from core.chat import Chat
-from core.claude import Claude
 from core.gemini import GeminiLLM
 from mcp_client import MCPClient
 
@@ -14,11 +11,9 @@ class CliChat(Chat):
         self,
         doc_client: MCPClient,
         clients: dict[str, MCPClient],
-        claude_service: Claude,
         gemini_service: GeminiLLM,
     ):
         super().__init__(clients=clients, gemini_service=gemini_service)
-
         self.doc_client: MCPClient = doc_client
 
     async def list_prompts(self) -> list[Prompt]:
@@ -62,7 +57,7 @@ class CliChat(Chat):
             command, {"doc_id": words[1]}
         )
 
-        self.messages += convert_prompt_messages_to_message_params(messages)
+        self.messages += convert_prompt_messages_to_gemini_contents(messages)
         return True
 
     async def _process_query(self, query: str):
@@ -85,20 +80,17 @@ class CliChat(Chat):
         Note the user's query might contain references to documents like "@report.docx". The "@" is only
         included as a way of mentioning the doc. The actual name of the document would be "report.docx".
         If the document content is included in this prompt, you don't need to use an additional tool to read the document.
-        Answer the user's question directly and concisely. Start with the exact information they need. 
+        Answer the user's question directly and concisely. Start with the exact information they need.
         Don't refer to or mention the provided context in any way - just use it to inform your answer.
         """
 
         self.messages.append({"role": "user", "parts": [{"text": prompt}]})
 
-
-def convert_prompt_message_to_message_param(
+def convert_prompt_message_to_gemini_content(
     prompt_message: "PromptMessage",
-) -> MessageParam:
-    role = "user" if prompt_message.role == "user" else "assistant"
-
+) -> dict[str, Any]:
+    role = "user" if prompt_message.role == "user" else "model"
     content = prompt_message.content
-
     # Check if content is a dict-like object with a "type" field
     if isinstance(content, dict) or hasattr(content, "__dict__"):
         content_type = (
@@ -106,18 +98,18 @@ def convert_prompt_message_to_message_param(
             if isinstance(content, dict)
             else getattr(content, "type", None)
         )
+
         if content_type == "text":
             content_text = (
                 content.get("text", "")
                 if isinstance(content, dict)
                 else getattr(content, "text", "")
             )
-            return {"role": role, "content": content_text}
+            text_parts.append({"text": content_text})
 
-    if isinstance(content, list):
-        text_blocks = []
+    # Case 2: content is a list of blocks
+    elif isinstance(content, list):
         for item in content:
-            # Check if item is a dict-like object with a "type" field
             if isinstance(item, dict) or hasattr(item, "__dict__"):
                 item_type = (
                     item.get("type", None)
@@ -130,17 +122,22 @@ def convert_prompt_message_to_message_param(
                         if isinstance(item, dict)
                         else getattr(item, "text", "")
                     )
-                    text_blocks.append({"type": "text", "text": item_text})
+                    text_parts.append({"text": item_text})
 
-        if text_blocks:
-            return {"role": role, "content": text_blocks}
+    # Case 3: fallback if content is already a string
+    elif isinstance(content, str):
+        text_parts.append({"text": content})
 
-    return {"role": role, "content": ""}
+    return {
+        "role": role,
+        "parts": text_parts or [{"text": ""}],
+    }
 
 
-def convert_prompt_messages_to_message_params(
+def convert_prompt_messages_to_gemini_contents(
     prompt_messages: List[PromptMessage],
-) -> List[MessageParam]:
+) -> List[dict[str, Any]]:
     return [
-        convert_prompt_message_to_message_param(msg) for msg in prompt_messages
+        convert_prompt_message_to_gemini_content(msg)
+        for msg in prompt_messages
     ]

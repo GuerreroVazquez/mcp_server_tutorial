@@ -92,6 +92,9 @@ def convert_prompt_message_to_gemini_content(
     role = "user" if prompt_message.role == "user" else "model"
     content = prompt_message.content
     # Check if content is a dict-like object with a "type" field
+    text_parts: list[dict[str, str]] = []
+
+    # Case 1: content is a dict-like or object with type/text
     if isinstance(content, dict) or hasattr(content, "__dict__"):
         content_type = (
             content.get("type", None)

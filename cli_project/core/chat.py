@@ -9,7 +9,24 @@ class Chat:
         self.gemini_service: GeminiLLM = gemini_service
         self.clients: dict[str, MCPClient] = clients
         self.messages: list[dict[str, Any]] = []
+    def _has_function_calls(self, response) -> bool:
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
 
+            for part in getattr(content, "parts", []) or []:
+                if getattr(part, "function_call", None) is not None:
+                    return True
+                if getattr(part, "functionCall", None) is not None:
+                    return True
+                if isinstance(part, dict):
+                    if part.get("function_call") is not None:
+                        return True
+                    if part.get("functionCall") is not None:
+                        return True
+
+        return False
     async def _process_query(self, query: str):
         self.messages.append({"role": "user", "parts": [{"text": query}]})
 

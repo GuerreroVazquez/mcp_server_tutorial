@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, List, Optional, Union
 
 from google import genai
@@ -99,7 +100,7 @@ class GeminiLLM:
                     texts.append(part["text"])
         return "\n".join(texts)
 
-    def chat(
+    async def chat(
         self,
         messages: List[Dict[str, Any]],
         system: Optional[str] = None,
@@ -127,7 +128,8 @@ class GeminiLLM:
 
         config = types.GenerateContentConfig(**config_kwargs)
 
-        response = self.client.models.generate_content(
+        response = await asyncio.to_thread(
+            self.client.models.generate_content,
             model=self.model,
             contents=messages,
             config=config,

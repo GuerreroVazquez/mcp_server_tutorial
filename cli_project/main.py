@@ -34,9 +34,9 @@ assert gemini_api_key, "Error: GOOGLE_API_KEY cannot be empty. Update .env"
 async def main():
     gemini_service = GeminiLLM(model=gemini_model, api_key=gemini_api_key)
 
-    if not await gemini_service.verify_connection():
-        print("Failed to connect to Gemini API. Check your GOOGLE_API_KEY and GEMINI_MODEL in .env")
-        sys.exit(1)
+    # if not await gemini_service.verify_connection():
+    #     print("Failed to connect to Gemini API. Check your GOOGLE_API_KEY and GEMINI_MODEL in .env")
+    #     sys.exit(1)
 
     server_scripts = sys.argv[1:]
     clients = {}

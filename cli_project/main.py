@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import os
+import warnings
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 
@@ -13,6 +14,9 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", module="google_genai")
 
 load_dotenv()
 

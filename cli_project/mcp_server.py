@@ -51,12 +51,16 @@ def format_document(
     doc_id: str = Field(description="The ID of the document to format.")
 ) -> list[base.Message]:
     prompt = f"""
-    Your goal is to format the content of the document with ID '{doc_id}' to markdown style. The content of the document is as follows:
-    <content>
-    {docs[doc_id]}
-    </content>
-    Please provide the formatted content in markdown style.
-    """
+        Your goal is to reformat a document to be written with markdown syntax.
+
+        The id of the document you need to reformat is:
+        <document_id>
+        {doc_id}
+        </document_id>
+
+        Add in headers, bullet points, tables, etc as necessary. Feel free to add in structure.
+        Use the 'edit_document' tool to edit the document. After the document has been reformatted...
+        """
     return [base.UserMessage(content=prompt)]
     
 

@@ -1,14 +1,52 @@
+import asyncio
+import logging
+import socket
 from typing import Any, Dict, List, Optional, Union
 
 from google import genai
 from google.genai import types
 
+logger = logging.getLogger(__name__)
+
+API_TIMEOUT = 60
+
+
+def _force_ipv4():
+    _orig = socket.getaddrinfo
+
+    def _ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = _ipv4_only
+
 
 class GeminiLLM:
     def __init__(self, model: str, api_key: Optional[str] = None):
-        # If api_key is None, the SDK can also read GOOGLE_API_KEY from env.
+        _force_ipv4()
         self.client = genai.Client(api_key=api_key)
         self.model = model
+
+    async def verify_connection(self) -> bool:
+        logger.info("Verifying Gemini API connection for model '%s'...", self.model)
+        try:
+            config = types.GenerateContentConfig(temperature=0.0)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model=self.model,
+                    contents=[{"role": "user", "parts": [{"text": "Say OK"}]}],
+                    config=config,
+                ),
+                timeout=API_TIMEOUT,
+            )
+            logger.info("Gemini API connection verified successfully.")
+            return True
+        except asyncio.TimeoutError:
+            logger.error("Gemini API connection timed out after %ds.", API_TIMEOUT)
+            return False
+        except Exception as e:
+            logger.error("Gemini API connection failed: %s", e)
+            return False
 
     def add_user_message(self, messages: List[Dict[str, Any]], message: Union[str, Any]):
         
@@ -99,7 +137,7 @@ class GeminiLLM:
                     texts.append(part["text"])
         return "\n".join(texts)
 
-    def chat(
+    async def chat(
         self,
         messages: List[Dict[str, Any]],
         system: Optional[str] = None,
@@ -127,9 +165,28 @@ class GeminiLLM:
 
         config = types.GenerateContentConfig(**config_kwargs)
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=messages,
-            config=config,
+        logger.debug(
+            "Gemini request: model=%s messages=%d tools=%s",
+            self.model,
+            len(messages),
+            bool(tools),
         )
-        return response
+
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model=self.model,
+                    contents=messages,
+                    config=config,
+                ),
+                timeout=API_TIMEOUT,
+            )
+            return response
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"Gemini API request timed out after {API_TIMEOUT}s. "
+                "Check your network connection and API key."
+            )
+        except Exception as e:
+            raise RuntimeError(f"Gemini API request failed: {e}")

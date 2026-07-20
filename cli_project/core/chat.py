@@ -39,7 +39,7 @@ class Chat:
         await self._process_query(query)
 
         while True:
-            response = self.gemini_service.chat(
+            response = await self.gemini_service.chat(
                 messages=self.messages,
                 tools=await ToolManager.get_all_tools(self.clients),
             )
